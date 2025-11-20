@@ -38,7 +38,7 @@ fn main() {
         }
         Command::TypeCommand { command_name } => {
             if built_in_commands.contains(&command_name.as_str()) {
-                println!("{} is a shell built-in", command_name);
+                println!("{} is a shell builtin", command_name);
             } else {
                 println!("{}: not found", command_name);
             }
