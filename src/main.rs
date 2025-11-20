@@ -1,141 +1,147 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
-const built_in_commands: [&str; 3] = ["echo", "exit", "type"]; //shell 内置命令列表
-enum Command {
-    ExitCommand,
-    EchoCommand { display_string: String },
-    TypeCommand { command_name: String },
-    ExternalCommand { program: String, args: Vec<String> }, //外部命令
-    CommandNotFound,
-} // 解析命令字符串并返回对应的 Command 枚举
-impl Command {
-    fn parse(command: &str) -> Command {
-        let parts: Vec<&str> = command.trim().split_whitespace().collect();
+use std::path::Path;
+use std::process::Command;
+
+const built_in_commands: [&str; 3] = ["echo", "exit", "type"]; // shell 内置命令列表
+
+enum CommandKind {
+    Exit,
+    Echo { display_string: String },
+    Type { command_name: String },
+    External { program: String, args: Vec<String> },
+    NotFound,
+}
+
+impl CommandKind {
+    fn parse(line: &str) -> CommandKind {
+        let parts: Vec<&str> = line.trim().split_whitespace().collect();
         match parts.as_slice() {
-            ["exit", "0"] => Command::ExitCommand,
-            ["echo", rest @ ..] => Command::EchoCommand {
+            ["exit", "0"] => CommandKind::Exit,
+            ["echo", rest @ ..] => CommandKind::Echo {
                 display_string: rest.join(" "),
             },
-            ["type", command_name] => Command::TypeCommand {
-                command_name: command_name.to_string(),
+            ["type", name] => CommandKind::Type {
+                command_name: name.to_string(),
             },
-            [] => Command::CommandNotFound,
+            [] => CommandKind::NotFound,
             _ => {
                 let program = parts[0].to_string();
                 let args = parts[1..].iter().map(|s| s.to_string()).collect();
-                Command::ExternalCommand { program, args }
+                CommandKind::External { program, args }
             }
         }
     }
 }
-fn check_environment_command(command_name: &str) -> Option<String> {
-    if let Ok(paths) = std::env::var("PATH") {
-        for path in paths.split(':') {
-            let full_path = format!("{}/{}", path, command_name);
 
-            if let Ok(metadata) = std::fs::metadata(&full_path) {
-                if metadata.is_file() {
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        if metadata.permissions().mode() & 0o111 != 0 {
-                            return Some(full_path);
-                        }
-                    }
-                    #[cfg(not(unix))]
-                    {
-                        // 非 Unix 平台只能判断为文件（没有可执行位概念）
-                        return Some(full_path);
-                    }
+// 检查路径是否为可执行文件（Unix 平台检查执行位，非 Unix 只判断为文件）
+fn is_executable(path: &Path) -> bool {
+    if let Ok(meta) = std::fs::metadata(path) {
+        if !meta.is_file() {
+            return false;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            return meta.permissions().mode() & 0o111 != 0;
+        }
+        #[cfg(not(unix))]
+        {
+            return true;
+        }
+    }
+    false
+}
+
+// 根据用户输入的 program（可能带路径或只是名字）返回可执行文件的真实路径以及希望传给子进程的 argv0（basename）
+fn resolve_executable(program: &str) -> Option<(String, String)> {
+    let argv0 = Path::new(program)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(program)
+        .to_string();
+
+    if program.contains('/') {
+        // 作为直接路径处理
+        let p = Path::new(program);
+        if is_executable(p) {
+            return Some((program.to_string(), argv0));
+        }
+        return None;
+    }
+
+    // 在 PATH 中查找
+    if let Ok(paths) = std::env::var("PATH") {
+        for dir in paths.split(':') {
+            let candidate = Path::new(dir).join(program);
+            if is_executable(&candidate) {
+                if let Some(s) = candidate.to_str() {
+                    return Some((s.to_string(), argv0));
                 }
             }
         }
     }
     None
 }
+
+fn spawn_and_wait(exe_path: String, argv0: String, args: &[String], presented_name: &str) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let mut cmd = Command::new(exe_path);
+        cmd.args(args);
+        // 把 argv[0] 设置为用户期望的名字（basename / 原始输入的最后一段）
+        cmd.arg0(argv0);
+        match cmd.spawn() {
+            Ok(mut child) => {
+                let _ = child.wait();
+            }
+            Err(e) => eprintln!("{}: failed to execute: {}", presented_name, e),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        match Command::new(exe_path).args(args).spawn() {
+            Ok(mut child) => {
+                let _ = child.wait();
+            }
+            Err(e) => eprintln!("{}: failed to execute: {}", presented_name, e),
+        }
+    }
+}
+
 fn main() {
-    // TODO: Uncomment the code below to pass the first stage
     loop {
         print!("$ ");
         io::stdout().flush().unwrap();
-        // 从标准输入读取一行命令
-        let mut command = String::new();
-        io::stdin().read_line(&mut command).unwrap();
-        let cmd = Command::parse(&command);
-        match cmd {
-            Command::ExitCommand => break,
-            Command::EchoCommand { display_string } => {
-                println!("{}", display_string);
-            }
-            Command::TypeCommand { command_name } => {
-                match built_in_commands.contains(&command_name.as_str()) {
-                    true => println!("{} is a shell builtin", command_name),
-                    false => match check_environment_command(&command_name) {
-                        Some(path) => println!("{} is {}", command_name, path),
-                        None => println!("{}: not found", command_name),
-                    },
-                }
-            }
-            Command::ExternalCommand { program, args } => {
-                // 如果包含 '/' 则当作直接路径处理，否则在 PATH 中查找
-                let maybe_path = if program.contains('/') {
-                    // 直接路径：检查是否存在且可执行（Unix 检查可执行位）
-                    if let Ok(meta) = std::fs::metadata(&program) {
-                        if meta.is_file() {
-                            #[cfg(unix)]
-                            {
-                                use std::os::unix::fs::PermissionsExt;
-                                if meta.permissions().mode() & 0o111 != 0 {
-                                    Some(program.clone())
-                                } else {
-                                    None
-                                }
-                            }
-                            #[cfg(not(unix))]
-                            {
-                                Some(program.clone())
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    check_environment_command(&program)
-                };
 
-                match maybe_path {
-                    Some(path) => {
-                        #[cfg(unix)]
-                        {
-                            use std::os::unix::process::CommandExt;
-                            let mut cmd = std::process::Command::new(path);
-                            cmd.args(&args);
-                            // 把 argv[0] 设置为用户输入的 program（不含路径），满足测试期望
-                            cmd.arg0(program.clone());
-                            match cmd.spawn() {
-                                Ok(mut child) => {
-                                    let _ = child.wait();
-                                }
-                                Err(e) => println!("{}: failed to execute: {}", program, e),
-                            }
-                        }
-                        #[cfg(not(unix))]
-                        {
-                            match std::process::Command::new(path).args(&args).spawn() {
-                                Ok(mut child) => {
-                                    let _ = child.wait();
-                                }
-                                Err(e) => println!("{}: failed to execute: {}", program, e),
-                            }
-                        }
-                    }
-                    None => println!("{}: not found", program),
+        let mut line = String::new();
+        if io::stdin().read_line(&mut line).is_err() {
+            break;
+        }
+        let trimmed = line.trim();
+        let cmd = CommandKind::parse(trimmed);
+
+        match cmd {
+            CommandKind::Exit => break,
+            CommandKind::Echo { display_string } => println!("{}", display_string),
+            CommandKind::Type { command_name } => {
+                if built_in_commands.contains(&command_name.as_str()) {
+                    println!("{} is a shell builtin", command_name);
+                } else if let Some(path) = resolve_executable(&command_name) {
+                    println!("{} is {}", command_name, path.0);
+                } else {
+                    println!("{}: not found", command_name);
                 }
             }
-            Command::CommandNotFound => {
-                println!("{}: command not found", command.trim());
+            CommandKind::External { program, args } => match resolve_executable(&program) {
+                Some((exe_path, argv0)) => {
+                    spawn_and_wait(exe_path, argv0, &args, &program);
+                }
+                None => println!("{}: not found", program),
+            },
+            CommandKind::NotFound => {
+                println!("{}: command not found", trimmed);
             }
         }
     }
