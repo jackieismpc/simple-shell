@@ -26,8 +26,24 @@ fn check_environment_command(command_name: &str) -> Option<String> {
     if let Ok(paths) = std::env::var("PATH") {
         for path in paths.split(':') {
             let full_path = format!("{}/{}", path, command_name);
-            if std::path::Path::new(&full_path).exists() {
-                return Some(full_path);
+            // if std::path::Path::new(&full_path).exists(){
+            //     return Some(full_path);
+            // }
+            if let Ok(metadata) = std::fs::metadata(&full_path) {
+                if metadata.is_file() {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        if metadata.permissions().mode() & 0o111 != 0 {
+                            return Some(full_path);
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        // 非 Unix 平台只能判断为文件（没有可执行位概念）
+                        return Some(full_path);
+                    }
+                }
             }
         }
     }
