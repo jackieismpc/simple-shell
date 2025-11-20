@@ -1,13 +1,13 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
-const built_in_commands: [&str; 3] = ["echo", "exit", "type"];//shell 内置命令列表
+const built_in_commands: [&str; 3] = ["echo", "exit", "type"]; //shell 内置命令列表
 enum Command {
     ExitCommand,
     EchoCommand { display_string: String },
     TypeCommand { command_name: String },
-    ExternalCommand { program: String, args: Vec<String> },//外部命令
+    ExternalCommand { program: String, args: Vec<String> }, //外部命令
     CommandNotFound,
-}// 解析命令字符串并返回对应的 Command 枚举
+} // 解析命令字符串并返回对应的 Command 枚举
 impl Command {
     fn parse(command: &str) -> Command {
         let parts: Vec<&str> = command.trim().split_whitespace().collect();
@@ -23,7 +23,7 @@ impl Command {
             _ => {
                 let program = parts[0].to_string();
                 let args = parts[1..].iter().map(|s| s.to_string()).collect();
-                Command::ExternalCommand { program, args }  
+                Command::ExternalCommand { program, args }
             }
         }
     }
@@ -68,7 +68,6 @@ fn main() {
                 println!("{}", display_string);
             }
             Command::TypeCommand { command_name } => {
-
                 match built_in_commands.contains(&command_name.as_str()) {
                     true => println!("{} is a shell builtin", command_name),
                     false => match check_environment_command(&command_name) {
@@ -108,11 +107,28 @@ fn main() {
 
                 match maybe_path {
                     Some(path) => {
-                        match std::process::Command::new(path).args(&args).spawn() {
-                            Ok(mut child) => {
-                                let _ = child.wait();
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::process::CommandExt;
+                            let mut cmd = std::process::Command::new(path);
+                            cmd.args(&args);
+                            // 把 argv[0] 设置为用户输入的 program（不含路径），满足测试期望
+                            cmd.arg0(program.clone());
+                            match cmd.spawn() {
+                                Ok(mut child) => {
+                                    let _ = child.wait();
+                                }
+                                Err(e) => println!("{}: failed to execute: {}", program, e),
                             }
-                            Err(e) => println!("{}: failed to execute: {}", program, e),
+                        }
+                        #[cfg(not(unix))]
+                        {
+                            match std::process::Command::new(path).args(&args).spawn() {
+                                Ok(mut child) => {
+                                    let _ = child.wait();
+                                }
+                                Err(e) => println!("{}: failed to execute: {}", program, e),
+                            }
                         }
                     }
                     None => println!("{}: not found", program),
