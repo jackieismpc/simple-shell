@@ -44,7 +44,7 @@ fn main() {
             }
         }
         Command::CommandNotFound => {
-            println!("command not found: {}", command.trim());
+            println!("{}: command not found", command.trim());
         }
     }   
 }
