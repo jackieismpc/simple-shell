@@ -1,12 +1,13 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
-const built_in_commands: [&str; 3] = ["echo", "exit", "type"];
+const built_in_commands: [&str; 3] = ["echo", "exit", "type"];//shell 内置命令列表
 enum Command {
     ExitCommand,
     EchoCommand { display_string: String },
     TypeCommand { command_name: String },
+    ExternalCommand { program: String, args: Vec<String> },//外部命令
     CommandNotFound,
-}
+}// 解析命令字符串并返回对应的 Command 枚举
 impl Command {
     fn parse(command: &str) -> Command {
         let parts: Vec<&str> = command.trim().split_whitespace().collect();
@@ -18,7 +19,12 @@ impl Command {
             ["type", command_name] => Command::TypeCommand {
                 command_name: command_name.to_string(),
             },
-            _ => Command::CommandNotFound,
+            [] => Command::CommandNotFound,
+            _ => {
+                let program = parts[0].to_string();
+                let args = parts[1..].iter().map(|s| s.to_string()).collect();
+                Command::ExternalCommand { program, args }  
+            }
         }
     }
 }
@@ -26,9 +32,7 @@ fn check_environment_command(command_name: &str) -> Option<String> {
     if let Ok(paths) = std::env::var("PATH") {
         for path in paths.split(':') {
             let full_path = format!("{}/{}", path, command_name);
-            // if std::path::Path::new(&full_path).exists(){
-            //     return Some(full_path);
-            // }
+
             if let Ok(metadata) = std::fs::metadata(&full_path) {
                 if metadata.is_file() {
                     #[cfg(unix)]
@@ -64,15 +68,6 @@ fn main() {
                 println!("{}", display_string);
             }
             Command::TypeCommand { command_name } => {
-                // if built_in_commands.contains(&command_name.as_str()) {
-                //     println!("{} is a shell builtin", command_name);
-                // }else if check_environment_command(&command_name) {
-                //     println!("{} is an external command", command_name);
-
-                // }
-                // else {
-                //     println!("{}: not found", command_name);
-                // }
 
                 match built_in_commands.contains(&command_name.as_str()) {
                     true => println!("{} is a shell builtin", command_name),
@@ -80,6 +75,47 @@ fn main() {
                         Some(path) => println!("{} is {}", command_name, path),
                         None => println!("{}: not found", command_name),
                     },
+                }
+            }
+            Command::ExternalCommand { program, args } => {
+                // 如果包含 '/' 则当作直接路径处理，否则在 PATH 中查找
+                let maybe_path = if program.contains('/') {
+                    // 直接路径：检查是否存在且可执行（Unix 检查可执行位）
+                    if let Ok(meta) = std::fs::metadata(&program) {
+                        if meta.is_file() {
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::fs::PermissionsExt;
+                                if meta.permissions().mode() & 0o111 != 0 {
+                                    Some(program.clone())
+                                } else {
+                                    None
+                                }
+                            }
+                            #[cfg(not(unix))]
+                            {
+                                Some(program.clone())
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    check_environment_command(&program)
+                };
+
+                match maybe_path {
+                    Some(path) => {
+                        match std::process::Command::new(path).args(&args).spawn() {
+                            Ok(mut child) => {
+                                let _ = child.wait();
+                            }
+                            Err(e) => println!("{}: failed to execute: {}", program, e),
+                        }
+                    }
+                    None => println!("{}: not found", program),
                 }
             }
             Command::CommandNotFound => {
