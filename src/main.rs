@@ -51,7 +51,7 @@ impl CommandKind {
         let parts: Vec<String> = split_args(line);
         let parts_ref: Vec<&str> = parts.iter().map(|s| s.as_str()).collect();
         match parts_ref.as_slice() {
-            ["exit", "0"] => CommandKind::Exit,
+            ["exit", ..] => CommandKind::Exit,
             ["echo", rest @ ..] => CommandKind::Echo {
                 display_string: rest.join(" "),
             },
