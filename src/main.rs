@@ -3,12 +3,13 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
 
-const built_in_commands: [&str; 3] = ["echo", "exit", "type"]; // shell 内置命令列表
+const built_in_commands: [&str; 4] = ["echo", "exit", "type","pwd"]; // shell 内置命令列表
 
 enum CommandKind {
     Exit,
     Echo { display_string: String },
     Type { command_name: String },
+    Pwd,
     External { program: String, args: Vec<String> },
     NotFound,
 }
@@ -24,6 +25,7 @@ impl CommandKind {
             ["type", name] => CommandKind::Type {
                 command_name: name.to_string(),
             },
+            ["pwd"] => CommandKind::Pwd,
             [] => CommandKind::NotFound,
             _ => {
                 let program = parts[0].to_string();
@@ -133,6 +135,11 @@ fn main() {
                 } else {
                     println!("{}: not found", command_name);
                 }
+            }
+            CommandKind::Pwd => {
+                let current_path = std::env::current_dir().unwrap();
+                let display_string = current_path.to_str().unwrap().to_string();
+                println!("{}", display_string);
             }
             CommandKind::External { program, args } => match resolve_executable(&program) {
                 Some((exe_path, argv0)) => {
