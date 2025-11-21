@@ -18,6 +18,7 @@ fn split_args(line: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut cur = String::new();
     let mut in_single = false;
+    let mut in_double = false;
     for c in line.chars() {
         if in_single {
             if c == '\'' {
@@ -25,9 +26,17 @@ fn split_args(line: &str) -> Vec<String> {
             } else {
                 cur.push(c);
             }
+        } else if in_double {
+            if c == '"' {
+                in_double = false;
+            } else {
+                cur.push(c);
+            }
         } else {
             if c == '\'' {
                 in_single = true;
+            } else if c == '"' {
+                in_double = true;
             } else if c.is_whitespace() {
                 if !cur.is_empty() {
                     args.push(cur);
@@ -41,7 +50,7 @@ fn split_args(line: &str) -> Vec<String> {
         }
     }
     // 末尾如果还有缓冲，作为最后一个参数加入（未闭合引号也当作文字处理）
-    if !cur.is_empty() || in_single {
+    if !cur.is_empty() || in_single || in_double {
         args.push(cur);
     }
     args
