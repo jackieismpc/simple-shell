@@ -146,8 +146,18 @@ fn main() {
                 println!("{}", display_string);
             }
             CommandKind::Cd { directory } => {
-                if std::env::set_current_dir(&directory).is_err() {
-                    println!("cd: {}: No such file or directory", directory);
+                if directory == "~" {
+                    if let Some(home_dir) = std::env::var_os("HOME") {
+                        if std::env::set_current_dir(&home_dir).is_err() {
+                            println!("cd: {}: No such file or directory", home_dir.to_string_lossy());
+                        }
+                    } else {
+                        println!("cd: HOME not set");
+                    }
+                } else {
+                    if std::env::set_current_dir(&directory).is_err() {
+                        println!("cd: {}: No such file or directory", directory);
+                    }
                 }
             }
             CommandKind::External { program, args } => match resolve_executable(&program) {
