@@ -14,14 +14,41 @@ enum CommandKind {
     External { program: String, args: Vec<String> },
     NotFound,
 }
-
+fn split_args(line: &str) -> Vec<String> {
+    let mut res = Vec::new();
+    let mut cur = String::new();
+    let mut in_quote = false;
+    for c in line.chars() {
+        if c == '\'' {
+            // 切换单引号状态；引号本身不加入结果
+            in_quote = !in_quote;
+            continue;
+        }
+        if c.is_whitespace() && !in_quote {
+            if !cur.is_empty() {
+                res.push(cur);
+                cur = String::new();
+            }
+        } else {
+            cur.push(c);
+        }
+    }
+    if !cur.is_empty() {
+        res.push(cur);
+    }
+    res
+}
 impl CommandKind {
     fn parse(line: &str) -> CommandKind {
-        let parts: Vec<&str> = line.trim().split_whitespace().collect();
-        match parts.as_slice() {
+        let parts = split_args(line);
+        // 用 &str 切片方便模式匹配
+        let parts_ref: Vec<&str> = parts.iter().map(|s| s.as_str()).collect();
+        match parts_ref.as_slice() {
             ["exit", "0"] => CommandKind::Exit,
-            ["echo", rest @ ..] => CommandKind::Echo {
-                display_string: rest.join(" "),
+            ["echo", ..] => {
+                // 用原始 parts 保留单引号内的空格
+                let display = if parts.len() >= 2 { parts[1..].join(" ") } else { String::new() };
+                CommandKind::Echo { display_string: display }
             },
             ["type", name] => CommandKind::Type {
                 command_name: name.to_string(),
