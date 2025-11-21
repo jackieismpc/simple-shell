@@ -152,7 +152,15 @@ fn main() {
         if io::stdin().read_line(&mut line).is_err() {
             break;
         }
+        match io::stdin().read_line(&mut line) {
+            Ok(0) => break, // EOF
+            Ok(_) => {}
+            Err(_) => break,
+        }
         let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
         let cmd = CommandKind::parse(trimmed);
 
         match cmd {
