@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
 
-const built_in_commands: [&str; 5] = ["echo", "exit", "type","pwd","cd"]; // shell 内置命令列表
+const built_in_commands: [&str; 5] = ["echo", "exit", "type", "pwd", "cd"]; // shell 内置命令列表
 
 enum CommandKind {
     Exit,
@@ -14,20 +14,31 @@ enum CommandKind {
     External { program: String, args: Vec<String> },
     NotFound,
 }
+
 fn split_args(line: &str) -> Vec<String> {
+    // 简单分词器：支持单引号，单引号内字符按字面处理，单引号外以空白分隔
     let mut res = Vec::new();
     let mut cur = String::new();
-    let mut in_quote = false;
-    for c in line.chars() {
+    let mut in_single = false;
+    let mut chars = line.chars().peekable();
+
+    while let Some(c) = chars.next() {
         if c == '\'' {
-            // 切换单引号状态；引号本身不加入结果
-            in_quote = !in_quote;
+            in_single = !in_single;
             continue;
         }
-        if c.is_whitespace() && !in_quote {
+        if c.is_whitespace() && !in_single {
             if !cur.is_empty() {
                 res.push(cur);
                 cur = String::new();
+            }
+            // 吃掉连续空白
+            while let Some(&nc) = chars.peek() {
+                if nc.is_whitespace() {
+                    chars.next();
+                } else {
+                    break;
+                }
             }
         } else {
             cur.push(c);
@@ -38,18 +49,25 @@ fn split_args(line: &str) -> Vec<String> {
     }
     res
 }
+
 impl CommandKind {
     fn parse(line: &str) -> CommandKind {
-        let parts = split_args(line);
-        // 用 &str 切片方便模式匹配
-        let parts_ref: Vec<&str> = parts.iter().map(|s| s.as_str()).collect();
-        match parts_ref.as_slice() {
+        let parts_owned = split_args(line);
+        let parts: Vec<&str> = parts_owned.iter().map(|s| s.as_str()).collect();
+
+        match parts.as_slice() {
             ["exit", "0"] => CommandKind::Exit,
-            ["echo", ..] => {
-                // 用原始 parts 保留单引号内的空格
-                let display = if parts.len() >= 2 { parts[1..].join(" ") } else { String::new() };
-                CommandKind::Echo { display_string: display }
-            },
+            ["echo", rest @ ..] => {
+                // rest 已保留单引号内的空格
+                let display = if parts_owned.len() >= 2 {
+                    parts_owned[1..].join(" ")
+                } else {
+                    String::new()
+                };
+                CommandKind::Echo {
+                    display_string: display,
+                }
+            }
             ["type", name] => CommandKind::Type {
                 command_name: name.to_string(),
             },
@@ -59,8 +77,12 @@ impl CommandKind {
             },
             [] => CommandKind::NotFound,
             _ => {
-                let program = parts[0].to_string();
-                let args = parts[1..].iter().map(|s| s.to_string()).collect();
+                let program = parts_owned.get(0).cloned().unwrap_or_default();
+                let args = if parts_owned.len() >= 2 {
+                    parts_owned[1..].to_vec()
+                } else {
+                    Vec::new()
+                };
                 CommandKind::External { program, args }
             }
         }
@@ -143,24 +165,38 @@ fn spawn_and_wait(exe_path: String, argv0: String, args: &[String], presented_na
     }
 }
 
+fn expand_home(path: &str) -> Option<String> {
+    // 支持 "~" 和 "~/" 开头展开 HOME
+    if path == "~" {
+        std::env::var_os("HOME").map(|h| h.to_string_lossy().into_owned())
+    } else if path.starts_with("~/") {
+        std::env::var_os("HOME").map(|h| {
+            let mut base = h.to_string_lossy().into_owned();
+            base.push_str(&path[1..]); // 把 "~/..." 拼接成 "/home/user/..."
+            base
+        })
+    } else {
+        Some(path.to_string())
+    }
+}
+
 fn main() {
     loop {
         print!("$ ");
         io::stdout().flush().unwrap();
 
         let mut line = String::new();
-        if io::stdin().read_line(&mut line).is_err() {
-            break;
-        }
         match io::stdin().read_line(&mut line) {
-            Ok(0) => break, // EOF
+            Ok(0) => break, // EOF -> 退出
             Ok(_) => {}
             Err(_) => break,
         }
+
         let trimmed = line.trim();
         if trimmed.is_empty() {
-            continue;
+            continue; // 忽略空行
         }
+
         let cmd = CommandKind::parse(trimmed);
 
         match cmd {
@@ -177,17 +213,19 @@ fn main() {
             }
             CommandKind::Pwd => {
                 let current_path = std::env::current_dir().unwrap();
-                let display_string = current_path.to_str().unwrap().to_string();
+                // 更安全的转换，避免 unwrap on non-UTF8
+                let display_string = current_path.to_string_lossy().into_owned();
                 println!("{}", display_string);
             }
             CommandKind::Cd { directory } => {
-                if directory == "~" {
-                    if let Some(home_dir) = std::env::var_os("HOME") {
-                        if std::env::set_current_dir(&home_dir).is_err() {
-                            println!("cd: {}: No such file or directory", home_dir.to_string_lossy());
+                if directory == "~" || directory.starts_with("~/") {
+                    match expand_home(&directory) {
+                        Some(target) => {
+                            if std::env::set_current_dir(&target).is_err() {
+                                println!("cd: {}: No such file or directory", target);
+                            }
                         }
-                    } else {
-                        println!("cd: HOME not set");
+                        None => println!("cd: HOME not set"),
                     }
                 } else {
                     if std::env::set_current_dir(&directory).is_err() {
