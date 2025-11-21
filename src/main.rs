@@ -3,13 +3,14 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
 
-const built_in_commands: [&str; 4] = ["echo", "exit", "type","pwd"]; // shell 内置命令列表
+const built_in_commands: [&str; 5] = ["echo", "exit", "type","pwd","cd"]; // shell 内置命令列表
 
 enum CommandKind {
     Exit,
     Echo { display_string: String },
     Type { command_name: String },
     Pwd,
+    Cd { directory: String },
     External { program: String, args: Vec<String> },
     NotFound,
 }
@@ -26,6 +27,9 @@ impl CommandKind {
                 command_name: name.to_string(),
             },
             ["pwd"] => CommandKind::Pwd,
+            ["cd", dir] => CommandKind::Cd {
+                directory: dir.to_string(),
+            },
             [] => CommandKind::NotFound,
             _ => {
                 let program = parts[0].to_string();
@@ -140,6 +144,11 @@ fn main() {
                 let current_path = std::env::current_dir().unwrap();
                 let display_string = current_path.to_str().unwrap().to_string();
                 println!("{}", display_string);
+            }
+            CommandKind::Cd { directory } => {
+                if std::env::set_current_dir(&directory).is_err() {
+                    println!("cd: {}: No such file or directory", directory);
+                }
             }
             CommandKind::External { program, args } => match resolve_executable(&program) {
                 Some((exe_path, argv0)) => {
